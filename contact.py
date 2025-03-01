@@ -106,7 +106,7 @@ def init_db():
     create_table_query = """
     CREATE TABLE IF NOT EXISTS faq (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        question TEXT UNIQUE,
+        question VARCHAR(255) UNIQUE,
         answer TEXT
     )
     """ if USE_MYSQL else """
