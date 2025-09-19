@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import sqlite3
 import pymysql
+import Levenshtein
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -68,34 +69,45 @@ def handle_message(event):
     )
 
 
-
-
+#=== ポート設定 ====
 # 環境変数またはデフォルト設定でDBを選択
 USE_MYSQL = os.getenv("USE_MYSQL", "false").lower() == "true"
 
-# MySQL の接続設定（環境変数から取得）
+# MAMPに合わせた設定（.envで上書き可）
 MYSQL_CONFIG = {
-    "host": os.getenv("MYSQL_HOST", "localhost"),
+    "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
     "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", ""),
+    "password": os.getenv("MYSQL_PASSWORD", "root"),   # MAMP既定
     "database": os.getenv("MYSQL_DATABASE", "chatbot_db"),
-    "port": int(os.getenv("MYSQL_PORT", 3306)),
+    "port": int(os.getenv("MYSQL_PORT", 8889)),        # MAMPは8889
+    "unix_socket": os.getenv("MYSQL_UNIX_SOCKET", "/Applications/MAMP/tmp/mysql/mysql.sock"),
 }
 
-
-# データベース接続関数
 def get_db_connection():
+    """
+    USE_MYSQL=true のとき:
+      1) ソケットがあれば unix_socket で接続（最優先）
+      2) なければ TCP(127.0.0.1:8889) で接続
+    それ以外は SQLite(chatbot.db)
+    """
     if USE_MYSQL:
-        return pymysql.connect(
-            host=MYSQL_CONFIG["host"],
+        kwargs = dict(
             user=MYSQL_CONFIG["user"],
             password=MYSQL_CONFIG["password"],
             database=MYSQL_CONFIG["database"],
-            port=MYSQL_CONFIG["port"],
+            charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+            connect_timeout=5,
         )
+        if os.path.exists(MYSQL_CONFIG["unix_socket"]):
+            return pymysql.connect(unix_socket=MYSQL_CONFIG["unix_socket"], **kwargs)
+        return pymysql.connect(host=MYSQL_CONFIG["host"], port=MYSQL_CONFIG["port"], **kwargs)
     else:
-        return sqlite3.connect("chatbot.db")
+        conn = sqlite3.connect("chatbot.db", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
 
 
 # データベース初期化（テーブル作成）
@@ -116,8 +128,24 @@ def init_db():
         answer TEXT
     )
     """
-
+    create_log_table_query = """
+    CREATE TABLE IF NOT EXISTS chat_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_message TEXT,
+        bot_response TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """ if not USE_MYSQL else """
+    CREATE TABLE IF NOT EXISTS chat_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_message TEXT,
+        bot_response TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """
+    
     cursor.execute(create_table_query)
+    cursor.execute(create_log_table_query)
     conn.commit()
     conn.close()
 
@@ -125,52 +153,91 @@ def init_db():
 init_db()  # 初回実行時にDBを作成
 
 
-# 質問に対する回答を取得
+#類似語変換用のシノニム辞書を定義
+SYNONYMS = {
+    "試合開始時間": ["試合開始","開始","何時から","プレイボール"],
+    "試合会場": ["会場","球場","野球場","グラウンド"],
+    "日程": ["試合日程","スケジュール"],
+    "雨": ["雨天","悪天候","雨が降っていたら","雨だったら","雨天時","雨の場合"],
+    "エントリー": ["参加申し込み","申込"],
+    "試合球": ["ボール","試合球は"],
+    "緊急連絡先": ["連絡先"]
+}
+
+#シノニムを正規化する関数（質問を変換）
+def normalize_question(text):
+    for key, synonyms in SYNONYMS.items():
+        for synonym in synonyms:
+            if synonym in text:
+                return key #正規化されたキーワードを返す
+    return text #該当なしならそのまま
+
+
+
 def get_response(text):
-    #質問内容を分解して単語リストを作成
-    tokens = [token.surface for token in tokenizer.tokenize(text)]
+    # --- 挨拶対応 ---
+    greetings = ["こんにちは", "おはようございます", "こんばんわ", "お疲れ様です", "お世話になります"]
+    response = None
+    for greeting in greetings:
+        if greeting in text:
+            response = f"{greeting}！いつもありがとうございます。"
+            break  # ここでは return しない（最後に共通のログ保存を通す）
 
-    if not tokens: #単語が登録されてない場合はNoneを返す
-        return None
-    
-    
-    conn = get_db_connection()  # データベース接続を取得
-    cursor = conn.cursor()  # カーソルオブジェクトを生成
-    response = None  # 応答を格納するための変数を初期化
-    best_match = None
-    max_match_count = 0 #最大一致単語数を記録
-    
-    
-    
+    if response is None:
+        # --- シノニム正規化 ---
+        user_input = normalize_question(text)
 
-    try:  # 全ての質問と回答のデータを取得
-        query = "SELECT question, answer FROM faq"
-        cursor.execute(query)       #SQLクエリを実行
-        results = cursor.fetchall() #取得したデータをresultsに格納
-        
-        for row in results:  #取得したデータを1行ずつ処理
-            #MySQLかSQLiteでデータの取得方法を分岐
-            db_question = row["question"] if USE_MYSQL else row[0]
-            db_answer = row["answer"] if USE_MYSQL else row[1]
+        # --- FAQ検索 ---
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        best_match = None
+        highest_similarity = 0.0
 
-            #質問内容とDBを比較し、単語の一致数を計算
-            match_count = sum(1 for token in tokens if token in db_question)
-            
-            if match_count > max_match_count: #一致数が最大のものを選択
-                max_match_count = match_count
-                best_match = db_answer
-                
-        if best_match:
+        try:
+            query = "SELECT question, answer FROM faq"
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+            for row in results:
+                # MySQL と SQLite での取得形式の差異を吸収
+                db_question = row["question"] if USE_MYSQL else row[0]
+                db_answer   = row["answer"]   if USE_MYSQL else row[1]
+
+                # 類似度計算
+                similarity = Levenshtein.ratio(user_input, db_question)
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    best_match = db_answer
+
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+
+        # --- 応答決定（ここで return しない）---
+        if highest_similarity >= 0.6:
             response = best_match
-        
-            
+        else:
+            response = "申し訳ありませんが、その質問には対応しておりません。後ほど担当者から返信いたします"
+
+    # --- ここから共通のログ保存（毎回通る）---
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        insert_log_query = (
+            "INSERT INTO chat_logs (user_message, bot_response) VALUES (%s, %s)"
+            if USE_MYSQL else
+            "INSERT INTO chat_logs (user_message, bot_response) VALUES (?, ?)"
+        )
+        cursor.execute(insert_log_query, (text, response))
+        conn.commit()
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"ログ保存エラー: {e}")
     finally:
         conn.close()
 
+    # --- 最後に返す ---
     return response
-
 
 # ユーザーからの問い合わせを処理
 @app.route("/chat", methods=["POST"])  # `method` → `methods` に修正
