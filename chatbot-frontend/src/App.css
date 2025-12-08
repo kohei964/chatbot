@@ -1,0 +1,99 @@
+/* src/App.css */
+
+.app {
+  max-width: 800px;
+  margin: 0 auto;
+  height: 100vh;
+  padding: 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.title {
+  text-align: center;
+  margin-bottom: 12px;
+  font-size: 20px;
+}
+
+/* チャット全体の枠 */
+.chat-window {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  background: #fafafa;
+}
+
+/* 1行分のメッセージ（左 or 右） */
+.message-row {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+/* Bot は左寄せ */
+.message-bot {
+  justify-content: flex-start;
+}
+
+/* ユーザーは右寄せ */
+.message-user {
+  justify-content: flex-end;
+}
+
+/* 吹き出し本体 */
+.message-bubble {
+  max-width: 75%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  font-size: 14px;
+}
+
+/* Bot 側の吹き出し */
+.message-bot .message-bubble {
+  background-color: gray;
+  border: 1px solid #ddd;
+  color: white;
+}
+
+/* ユーザー側の吹き出し */
+.message-user .message-bubble {
+  background-color: #00C300;
+  color:black;
+}
+
+/* 入力エリア全体 */
+.input-area {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* テキストエリア */
+.input-area textarea {
+  flex: 1;
+  resize: none;
+  padding: 8px;
+  font-size: 14px;
+}
+
+/* 送信ボタン */
+.input-area button {
+  padding: 0 16px;
+  font-size: 14px;
+  border: none;
+  border-radius: 8px;
+  background-color: #0078ff;
+  color: white;
+  cursor: pointer;
+}
+
+/* 送信ボタン（無効時） */
+.input-area button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
