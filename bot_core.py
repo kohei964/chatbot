@@ -1,168 +1,17 @@
-
-from collections import defaultdict
-from difflib import SequenceMatcher
 import Levenshtein
-import re
-import random
 
 from db import get_db_connection, USE_MYSQL
 
-#=== 感情分析↓↓ ========================
-#汚い言葉検地用の変数
-INSULT_WORDS = [
-    "死ね", "しね", "バカ", "ばか", "アホ", "クズ", "ゴミ",
-    "きもい", "キモい", "うざい", "うぜえ", "カス",
-    "黙れ", "だまれ", "消えろ", "クソ", "ふざけるな", "ふざけんな",
-]
-
-#リアクション検知用
-ANGRY_WORDS = [
-    r"なんだよ",
-    r"意味わからん",
-    r"使えね[えぇ]?",
-    r"最悪",
-]
-
-#ユーザーの発言からの判定("normal"|"angry"|"insult")用の関数
-def detect_tone(text: str) -> str:
-    t = text.strip()
-
-    #汚い言葉検知
-    for w in INSULT_WORDS:
-        if w in t:
-            return "insult"
-    
-    #リアクション検知
-    for pattern in ANGRY_WORDS:
-        if re.search(pattern, t):
-            return "angry"
-    
-    return "normal"
-
-#丁寧レス用の関数
-def reply_for_angry(tone: str, core_reply: str) -> str:
-    #tone ("normal"|"angry"|"insult")
-
-    if tone == "insult":
-        prefix = (
-            "ご不快な思いをさせてしまい申し訳ありません。内容を一部控えめにご案内いたします。\n"
-            "大変申し訳ありませんが、丁寧な言葉でお問い合わせいただけると助かります"
-        )
-    elif tone == "angry":
-        prefix = (
-            "ご不便をおかけしているようで申し訳ありません。\n"
-            "状況を整理しながら、できる限り丁寧にご案内いたします。\n"
-        )
-    else:
-        #通常トーン(そのまま返す)
-        return core_reply
-    
-    return f"{prefix}\n{core_reply}"
-#=== 感情分析↑↑ ========================
-
-#=== 言語判定（英語/日本語)↓↓ ============
-def detect_language(text: str) -> str:
-    """
-    言語判定
-        "ja"    : 日本語のみ（ひらがな、カタカナ、漢字） 
-        "en"    : 英語のみ
-        "mixed" : 日本語+英語ミックス
-        "other" : どちらもほぼなし（絵文字、記号のみ等）
-    """
-    t = text.strip() #空白・改行などを削除
-
-    #ひらがな/カタカナ/漢字
-    has_ja = bool(re.search(r'[\u3040-\u30ff\u4e00-\u9fff]', t)) 
-    #英字
-    has_en = bool(re.search(r'[A-Za-z]', t))
-
-    if has_ja and not has_en:
-        return "ja"
-    elif has_en and not has_ja:
-        return "en"
-    elif has_ja and has_en:
-        return "mixed"
-    else:
-        return "other"
-#=== 言語判定（英語/日本語)↑↑ ============
-
-#=== 自然言語↓↓ ======================== 
-#冒頭につける変数（random）
-OPENERS = [
-    "お問い合わせありがとうございます。",
-    "ご質問ありがとうございます。",
-    "メッセージありがとうございます。",
-    "ご連絡いただきありがとうございます。",
-]
-
-#締めくくりにつける変数(random)
-CLOSERS = [
-    "その他気になる点がございましたら、遠慮なくお知らせください。",
-    "もし追加でご不明な点があれば、お気軽にご質問ください。",
-    "引き続きどうぞよろしくお願いいたします。",
-    "お役に立てれば幸いです。",
-]
-
-#自然言語用の関数
-def natural_text(core_reply: str, use_opener: bool = True, use_closer: bool = True) -> str:
-    parts = []
-
-    if use_opener:
-        parts.append(random.choice(OPENERS))
-    
-    parts.append(core_reply.strip())
-
-    if use_closer:
-        parts.append(random.choice(CLOSERS))
-    
-    return "\n".join(parts)
-#=== 自然言語↑↑ ==========================
-
-#=== コンテキスト（会話履歴保持）↓↓ ==========
-USER_CONTEXT = defaultdict(lambda: {
-    "last_question": None,
-    "last_answer": None,
-    "last_label": None, #キーワード（営業時間、試合会場...）
-})
-
-#リピート要求(振り返り)を検知する変数
-REPEAT_WORDS = [
-    r"(さっき|前の|先ほど|さきほど).*(もう一度|もういちど|教えて|おしえて)",
-    r"もう一度(教えて)?",
-    r"さっきの(回答|やつ)?(もう一回|もう一度)",
-]
-
-#↑の関数
-def repeat_request(text: str) -> bool:
-    t = text.strip()
-    for pat in REPEAT_WORDS:
-        if re.search(pat, t):
-            return True
-    return False
-
-#=== コンテキスト（会話履歴保持）↑↑ ==========
-
-#=== フォールバック部分↓↓ ===================
-#フォールバック用セッション管理
-SESSION = defaultdict(lambda: {"await_choice": False, "cands":[]})
-
-SUGGEST_POOL = ["営業時間","試合会場","駐車場","選手登録期限","試合日程","雨天時の対応","エントリー","試合球の規定","緊急連絡先"]  # 追加
-
-def suggest_labels(user_text, pool, topn=3):
-    scored = []
-    for label in pool:
-        s = SequenceMatcher(None, user_text, label).ratio()
-        scored.append((s, label))
-    scored.sort(reverse=True)
-    return [lab for _, lab in scored[:topn]]
-
-def make_choice_message(cands):
-    bullets = "\n".join([f"・{i+1}. {lab}" for i, lab in enumerate(cands)])
-    return (
-        "すみません、よくわかりませんでした。次のどれが近いですか？\n"
-        f"{bullets}\n番号でお答えください。"
-    )
-#=== フォールバック部分↑↑ ===================
+from analysis import detect_tone, detect_language, reply_for_angry
+from textgen import natural_text
+from context import (
+    USER_CONTEXT,
+    SESSION,
+    repeat_request,
+    SUGGEST_POOL,
+    suggest_labels,
+    make_choice_message,
+)
 
 #=== ロジック部分↓↓ ========================
 #類似語変換用のシノニム辞書を定義
