@@ -116,7 +116,31 @@ def natural_text(core_reply: str, use_opener: bool = True, use_closer: bool = Tr
         parts.append(random.choice(CLOSERS))
     
     return "\n".join(parts)
-#=== 自然言語↑↑ ========================
+#=== 自然言語↑↑ ==========================
+
+#=== コンテキスト（会話履歴保持）↓↓ ==========
+USER_CONTEXT = defaultdict(lambda: {
+    "last_question": None,
+    "last_answer": None,
+    "last_label": None, #キーワード（営業時間、試合会場...）
+})
+
+#リピート要求(振り返り)を検知する変数
+REPEAT_WORDS = [
+    r"(さっき|前の|先ほど|さきほど).*(もう一度|もういちど|教えて|おしえて)",
+    r"もう一度(教えて)?",
+    r"さっきの(回答|やつ)?(もう一回|もう一度)",
+]
+
+#↑の関数
+def repeat_request(text: str) -> bool:
+    t = text.strip()
+    for pat in REPEAT_WORDS:
+        if re.search(pat, t):
+            return True
+    return False
+
+#=== コンテキスト（会話履歴保持）↑↑ ==========
 
 #=== フォールバック部分↓↓ ===================
 #フォールバック用セッション管理
@@ -138,9 +162,9 @@ def make_choice_message(cands):
         "すみません、よくわかりませんでした。次のどれが近いですか？\n"
         f"{bullets}\n番号でお答えください。"
     )
-#=== フォールバック部分ここまで =============
+#=== フォールバック部分↑↑ ===================
 
-#=== ロジック部分ここから =========
+#=== ロジック部分↓↓ ========================
 #類似語変換用のシノニム辞書を定義
 SYNONYMS = {
     "営業時間": ["何時から", "何時まで", "受付時間", "営業", "オープン", "クローズ"],
@@ -163,12 +187,72 @@ def normalize_question(text):
     return text #該当なしならそのまま
 
 
-#=== 応答部分↓↓ =============================
+#=========== 
+# 応答部分
+#===========
 def get_response(user_id, text):
 
     tone = detect_tone(text) #感情分析用
     lang = detect_language(text) #言語判定（日本語/英語）
 
+    #------------
+    #"パターンA" 
+    # 繰り返し判定ヒットした場合（repeat_request = True）の応答部分
+    #------------
+    if repeat_request(text):
+        ctx = USER_CONTEXT[user_id] #ctx = コンテキスト
+
+        #前回の会話履歴が保存されているかの確認
+        if ctx["last_answer"]: #コンテキストが残っているパターン
+            base_response = ctx["last_answer"]
+
+            #感情表現 + 自然言語も
+            if tone in ("angry", "insult"):
+                core = reply_for_angry(tone, base_response)
+                response = natural_text(core, use_opener=False, use_closer=True)
+            else:
+                response = natural_text(base_response)
+            
+            #ログ保存
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                insert_log_query = (
+                    "INSERT INTO chat_logs (user_message, bot_response) VALUES (%s, %s)"
+                    if USE_MYSQL else
+                    "INSERT INTO chat_logs (user_message, bot_response) VALUES (?, ?)"
+                )
+                cursor.execute(insert_log_query, (text, response))
+                conn.commit()
+            except Exception as e:
+                print(f"ログ保存エラー: {e}")
+            finally:
+                conn.close()
+            return response
+        else: #初回など、履歴(last_answer)が空の場合
+            response = "直前の会話がありません。お手数ですが、もう一度質問してください"
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                insert_log_query = (
+                    "INSERT INTO chat_logs (user_message, bot_response) VALUES (%s, %s)"
+                    if USE_MYSQL else
+                    "INSERT INTO chat_logs (user_message, bot_response) VALUES (?, ?)"
+                )
+                cursor.execute(insert_log_query, (text, response))
+                conn.commit()
+            except Exception as e:
+                print(f"ログ保存エラー: {e}")
+            finally:
+                conn.close()
+            return response
+
+    
+
+    #------------
+    #"パターンB" 
+    # 通常の応答部分
+    #------------
     #⓪日本語以外だった時の処理
     if lang in ("en"):
         base_response = (
@@ -180,10 +264,31 @@ def get_response(user_id, text):
             response = natural_text(core, use_opener=False, use_closer=True)
         else:
             response = natural_text(base_response)
-        
-        #ログ保存
-        return response
 
+        # コンテキスト更新
+        ctx = USER_CONTEXT[user_id]
+        ctx["last_question"] = text
+        ctx["last_answer"]   = response
+        ctx["last_label"]    = None
+
+        # ログ保存
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            insert_log_query = (
+                "INSERT INTO chat_logs (user_message, bot_response) VALUES (%s, %s)"
+                if USE_MYSQL else
+                "INSERT INTO chat_logs (user_message, bot_response) VALUES (?, ?)"
+            )
+            cursor.execute(insert_log_query, (text, response))
+            conn.commit()
+        except Exception as e:
+            print(f"ログ保存エラー: {e}")
+        finally:
+            conn.close()
+
+        return response
+    
     # ①番号待ちの処理
     if SESSION[user_id]["await_choice"]:
         normalized = text.strip()
@@ -199,6 +304,8 @@ def get_response(user_id, text):
                 cursor = conn.cursor()
                 best_match = None
                 highest_similarity = 0.0
+
+                #ログ保存
                 try:
                     cursor.execute("SELECT question, answer FROM faq")
                     results = cursor.fetchall()
@@ -306,6 +413,10 @@ def get_response(user_id, text):
     if highest_similarity >= 0.6 and best_match:
         base_response = best_match
 
+        #今回の回答をコンテキスト（履歴）に記録
+        USER_CONTEXT[user_id]["last_question"] = user_input
+        USER_CONTEXT[user_id]["last_answer"] = base_response
+
         #感情分析+自然言語組み合わせ
         if tone in ("angry", "insult"):
             #荒れている時（丁寧モード + クロージングのみ自然言語化 ）
@@ -327,6 +438,10 @@ def get_response(user_id, text):
         #自然言語化
         else:
             base_response = "申し訳ありませんが、その質問には対応しておりません。\n後ほど担当者から返信いたします"
+
+            #今回の回答をコンテキスト（履歴）に記録
+            USER_CONTEXT[user_id]["last_question"] = user_input
+            USER_CONTEXT[user_id]["last_answer"] = base_response
 
             if tone in ("angry", "insult"):
                 ##荒れている時（prefix + 回答 + クロージングのみ自然言語化 ）
@@ -353,4 +468,4 @@ def get_response(user_id, text):
         conn.close()
 
     return response
-#=== ロジック部分ここまで =========
+#=== ロジック部分↑↑ ===============================
