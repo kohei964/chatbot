@@ -12,6 +12,7 @@ from context import (
     suggest_labels,
     make_choice_message,
 )
+from normalize import normalize_input
 
 #=== ロジック部分↓↓ ========================
 #類似語変換用のシノニム辞書を定義
@@ -41,6 +42,8 @@ def normalize_question(text):
 #===========
 def get_response(user_id, text):
 
+    raw_text = text 
+    text = normalize_input(text) #入力正規化(表記統一)
     tone = detect_tone(text) #感情分析用
     lang = detect_language(text) #言語判定（日本語/英語）
 
@@ -48,7 +51,7 @@ def get_response(user_id, text):
     #"パターンA" 
     # 繰り返し判定ヒットした場合（repeat_request = True）の応答部分
     #------------
-    if repeat_request(text):
+    if repeat_request(raw_text): #語尾を削る前のテキストを見る
         ctx = USER_CONTEXT[user_id] #ctx = コンテキスト
 
         #前回の会話履歴が保存されているかの確認
