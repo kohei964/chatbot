@@ -51,13 +51,15 @@ def init_db():
     CREATE TABLE IF NOT EXISTS faq (
         id INT AUTO_INCREMENT PRIMARY KEY,
         question VARCHAR(255) UNIQUE,
-        answer TEXT
+        answer TEXT,
+        has_map BOOLEAN NOT NULL DEFAULT 0
     )
     """ if USE_MYSQL else """
     CREATE TABLE IF NOT EXISTS faq (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         question TEXT UNIQUE,
-        answer TEXT
+        answer TEXT,
+        has_map BOOLEAN NOT NULL DEFAULT 0
     )
     """
     create_log_table_query = """

@@ -8,6 +8,7 @@ from db import get_db_connection, USE_MYSQL
 from textgen import natural_text
 from analysis import reply_for_angry
 from context import USER_CONTEXT, SESSION, suggest_labels, make_choice_message, SUGGEST_POOL
+from map import make_map_url
 
 #======
 #ログ保存の共通部分
@@ -154,20 +155,29 @@ def handle_faq(user_id: str, text: str, tone: str, normalize_question) -> str:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT question, answer FROM faq")
+        cur.execute("SELECT question, answer, has_map FROM faq")
         rows = cur.fetchall()
         for row in rows:
             q = row["question"] if USE_MYSQL else row[0]
             a = row["answer"] if USE_MYSQL else row[1]
-            sim = Levenshtein.ratio(user_input, q)
+            m = row["has_map"] if USE_MYSQL else row[2]#追加
+
+            q_norm = normalize_question(q)
+            sim = Levenshtein.ratio(user_input, q_norm)
             if sim > best_sim:
                 best_sim = sim
-                best_match = a
+                best_match = {"q":q, "a":a, "m":m, "sim":sim}
     finally:
         conn.close()
     
+    #ヒットした場合
     if best_match and best_sim >=0.6:
-        base = best_match
+        base = best_match["a"]
+
+        if best_match["m"] == 1: #Googlemap処理
+            map_query = normalize_question(best_match["q"])
+            map_url = make_map_url(map_query)
+            base += "\n" + map_url
 
         ctx = USER_CONTEXT[user_id]
         ctx ["last_question"] = user_input

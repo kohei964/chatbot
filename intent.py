@@ -28,8 +28,8 @@ def detect_intent(user_id: str, text: str, *, lang: str, session) -> str:
     if _REPEAT_RE.search(t):
         return "repeat"
     
-    # 3)日本語か英語か(non_ja)
-    if lang == "en":
+    # 3)日本語以外("en", "mixed", "other")
+    if lang in ("en", "mixed", "other"):
         return "non_ja"
     
     # 4)挨拶(greeting)
