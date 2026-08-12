@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# SQLite
+*.db-shm
+*.db-wal
+
+# Node.js
+node_modules/

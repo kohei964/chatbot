@@ -3,6 +3,7 @@
 # =====================
 
 import Levenshtein
+import re
 from db import get_db_connection, USE_MYSQL
 
 from textgen import natural_text
@@ -36,7 +37,7 @@ def save_log(user_message: str, bot_response: str):
             conn.close()
 
 #======
-#自然言語化の部分？
+#自然言語化＋怒り判定時の部分
 #======
 def apply_style(tone: str, base_response: str, *, opener=True, closer=True) -> str:
     """tone + 自然言語化(共通化)"""
@@ -46,7 +47,7 @@ def apply_style(tone: str, base_response: str, *, opener=True, closer=True) -> s
     return natural_text(base_response, use_opener=opener, use_closer=closer)
 
 #======
-#繰り返しの質問用部分？
+#繰り返しの質問用部分
 #======
 def handle_repeat(user_id: str, text: str, tone: str) ->str:
     ctx = USER_CONTEXT[user_id]
@@ -65,6 +66,7 @@ def handle_non_ja(user_id: str, text: str, tone: str) -> str:
     base = "恐れ入りますが、\n日本語でのお問い合わせをお願いいたします。"
     response = apply_style(tone, base)
 
+    #コンテキスト（会話履歴保存）
     ctx = USER_CONTEXT[user_id]
     ctx ["last_question"] = text
     ctx ["last_answer"] = response
@@ -149,6 +151,54 @@ def handle_greeting(user_id: str, text: str, tone: str) -> str:
 #======
 def handle_faq(user_id: str, text: str, tone: str, normalize_question) -> str:
     user_input = normalize_question(text)
+    #日付抽出用の正規表現（試合日・会場紐付け）
+    m = re.search(r"\d{1,2}/\d{1,2}", text) 
+    if m:
+        date_str = m.group()   # "7/10"
+        month, day = date_str.split("/") #月/日の形式にする
+        year = "2026"
+        db_date = f"{year}-{int(month):02d}-{int(day):02d}" #DB形式に変換する
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        #日付検索（DB）
+        try:
+            if USE_MYSQL:
+                cur.execute( #db_dateと同じ日付を検索（MYSQL版）
+                    "SELECT stadium_name FROM map_response WHERE game_date = %s",
+                    (db_date,)
+                )
+            else:
+                cur.execute( #db_dateと同じ日付を検索（SQLite版）
+                    "SELECT stadium_name FROM map_response WHERE game_date = ?",
+                    (db_date,)
+                )
+            row = cur.fetchone() #ヒットしたらrowに入れる
+        finally:
+            conn.close()
+
+        #日付がマッチした時(rowに値が入っている時)
+        if row:
+            if USE_MYSQL:
+                stadium_name = row["stadium_name"]
+            else:
+                stadium_name = row[0]
+
+            map_url = make_map_url(stadium_name)
+
+            base = f"{date_str}の会場は{stadium_name}です。\n{map_url}"
+
+            ctx = USER_CONTEXT[user_id]
+            ctx["last_question"] = text
+            ctx["last_answer"] = base
+            ctx["last_label"] = None
+
+            response = apply_style(tone, base)
+            save_log(text, response)
+
+            return response
+
 
     best_match = None
     best_sim = 0.0

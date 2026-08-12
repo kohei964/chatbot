@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import './App.css'
 
+// ↓↓react-bootstrap
+import Container from "react-bootstrap/Container";
+import Card from "react-bootstrap/Card";
+import Table from "react-bootstrap/Table";
+import Button from "react-bootstrap/Button";
+import Form from "react-bootstrap/Form";
+import { Link } from "react-router-dom";
+
 
 /*== 「App」コンポーネント ===========================*/
 //コンポーネント = 画面に表示する単位
@@ -107,6 +115,10 @@ function App() {
           {isLoading ? "送信中..." : "送信"}
         </button>
       </form>
+      <Link to="/admin/faqs">
+          <Button variant="secondary" className="mb-3">FAQ管理画面</Button>
+      </Link>
+ 
     </div>
   );
 

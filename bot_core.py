@@ -36,7 +36,7 @@ def normalize_question(text):
 
 
 #=========== 
-# 応答部分
+# handlersへの指示
 #===========
 def get_response(user_id, text):
     text = normalize_input(text)

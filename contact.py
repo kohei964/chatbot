@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from routes.faq_routes import faq_api
 from flask_cors import CORS
 import os
 
@@ -19,6 +20,9 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 CORS(app)  # CORSを有効化（フロントエンドとの接続）
+
+#FAQ関連APIをFlaskアプリ（app）に登録
+app.register_blueprint(faq_api)
 
 tokenizer = Tokenizer()
 

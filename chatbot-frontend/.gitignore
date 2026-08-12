@@ -7,16 +7,32 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
+# Node.js
+node_modules/
+chatbot-frontend/node_modules/
+
 dist
 dist-ssr
 *.local
+
+# Python
+__pycache__/
+*.pyc
+
+# SQLite
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+
+# macOS
+.DS_Store
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
